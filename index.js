@@ -1,7 +1,8 @@
+require('dotenv').config()
 const express = require('express')
 const morgan = require('morgan')
 const app = express()
-
+const Person = require('./models/person')
 // Crear un token personalizado que muestre el cuerpo de la solicitud si la solicitud es un POST
 morgan.token('req-body', (req, res) => {
   if (req.method === 'POST') {
@@ -15,105 +16,109 @@ app.use(morgan(':method :url :status :res[content-length] - :response-time ms :r
 app.use(express.static('build'))
 app.use(express.json())
 
-// const unknownEndpoint = (request, response) => {
-//   response.status(404).send({ error: 'unknown endpoint' })
-// }
-
-let persons = [
-  {
-    id: 1,
-    name: "Arto Hellas",
-    number: "040-015112"
-  },
-  {
-    id: 2,
-    name: "Ada Lovelace",
-    number: "39-44516484"
-  },
-  {
-    id: 3,
-    name: "Dan Abramov",
-    number: "154-15-515"
-  },
-  {
-    id: 4,
-    name: "Mary Poppendick",
-    number: "39-23-642122"
-  },
-  {
-    id: 5,
-    name: "a borrar",
-    number: "11518"
-  }
-]
-
-
-
 app.post('/api/persons', (req, res) => {
   const body = req.body
 
-   // Verificar si el nombre ya existe en la agenda
-  const existingPerson = persons.find(person => person.name === body.name)
-  if (existingPerson) {
-    return res.status(409).json({ 
-      error: 'name must be unique' 
+  // Verificar si el nombre ya existe en la agenda
+  Person.find({ name: body.name }).then(result => {
+    if (result.length > 0) {
+      return res.status(409).json({ 
+        error: 'name must be unique' 
+      })
+    }
+
+    // Verificar si faltan el nombre o el número
+    if (!body.name || !body.number) {
+      return res.status(400).json({ 
+        error: 'name or number is missing' 
+      })
+    }
+
+    const person = new Person({
+      name: body.name,
+      number: body.number
     })
-  }
 
-   // Verificar si faltan el nombre o el número
-   if (!body.name || !body.number) {
-    return res.status(400).json({ 
-      error: 'name or number is missing' 
-    })
-  }
-
-  // Crear una nueva entrada y agregarla a la agenda
-  const person = {
-    id: Math.floor(Math.random() * 100000),
-    name: body.name,
-    number: body.number
-  }
-  persons = persons.concat(person)
-
-  // Responder con la nueva entrada de la agenda
-  res.json(person)
+    person.save().then(savedPerson => {
+      res.json(savedPerson)
+    }).catch(error => next(error))
+  }).catch(error => next(error))
 })
+
 
 app.get('/info', (req, res) => {
-  const date = new Date()
-  const totalPersons = persons.length
-  const message = `La agenda telefónica tiene ${totalPersons} entradas.`
-  const time = `La solicitud se recibió en ${date}.`
-  res.send(`${message}<br>${time}`)
+  Person.countDocuments({})
+    .then(count => {
+      res.send(
+        `<p>Phonebook has info for ${count} people</p>` +
+        `<p>${new Date()}</p>`
+      )
+    })
+    .catch(error => next(error))
 })
 
-app.get('/api/persons', (req, res) => {
-  res.json(persons)
+app.get('/api/persons', (request, response, next) => {
+  Person.find({})
+    .then(persona => {
+      response.json(persona)
+    })
+    .catch(error => next(error))
 })
 
-app.get('/api/persons/:id', (request, response) => {
-  const id = Number(request.params.id)
-  const person = persons.find(person => person.id === id)
+app.get('/api/persons/:id', (request, response, next) => {
+  const id = request.params.id
 
-  if (person) {
-    response.json(person)
-  } else {
-    response.status(404).end()
+  Person.findById(id).then(person => {
+    if (person) {
+      response.json(person)
+    } else {
+      response.status(404).end()
+    }
+  })
+  .catch(error => next(error))
+})
+
+app.put('/api/persons/:id', (request, response, next) => {
+  const id = request.params.id
+  const body = request.body
+
+  const person = {
+    name: body.name,
+    number: body.number,
   }
 
-  response.json(person)
+  Person.findByIdAndUpdate(id, person, { new: true })
+    .then(updatedPerson => {
+      response.json(updatedPerson)
+    })
+    .catch(error => next(error))
 })
 
-app.delete('/api/persons/:id', (request, response) => {
-  const id = Number(request.params.id)
-  persons = persons.filter(note => note.id !== id)
+app.delete('/api/persons/:id', (request, response, next) => {
+  const id = request.params.id
 
-  response.status(204).end()
+  Person.findByIdAndRemove(id)
+    .then(result => {
+      response.status(204).end()
+    })
+    .catch(error => next(error))
 })
 
-// app.use(unknownEndpoint)
+app.use((error, request, response, next) => {
+  console.error(error.message)
 
-const PORT = process.env.PORT || 3001
+  if (error.name === 'CastError' && error.kind === 'ObjectId') {
+    return response.status(400).send({ error: 'malformatted id' })
+  } else if (error.name === 'ValidationError') {
+    return response.status(400).json({ error: error.message })
+  } else if (error.name === 'MongoError' && error.code === 11000) {
+    return response.status(400).json({ error: 'name must be unique' })
+  }
+
+  next(error)
+})
+
+const PORT = process.env.PORT
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
 })
